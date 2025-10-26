@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Tuple
+from math import erf, sqrt
 import math
 
 import pandas as pd
@@ -329,3 +330,115 @@ def month_actuals_by_category(conn: sqlite3.Connection, base: str, year: int, mo
     grp = df.groupby("category", as_index=False)["amount_base"].sum()
     return {str(r["category"]): float(r["amount_base"]) for _, r in grp.iterrows()}
 
+def _phi(z: float) -> float:
+    # 표준정규 CDF
+    return 0.5 * (1.0 + erf(z / sqrt(2.0)))
+
+def mann_kendall(y: pd.Series) -> Optional[Dict[str, float]]:
+    """
+    Mann–Kendall trend test (ties 무시한 간단 버전).
+    y: 시계열 값(시간 순 정렬). 길이 n<3이면 None.
+    반환: {"tau": τ, "z": z, "p": p_two_sided}
+    """
+    y = y.dropna()
+    n = len(y)
+    if n < 3:
+        return None
+    vals = y.values
+    # S = sum_{j>i} sign(yj - yi)
+    S = 0
+    for i in range(n - 1):
+        diff = vals[i + 1:] - vals[i]
+        S += (diff > 0).sum() - (diff < 0).sum()
+    # Kendall's tau
+    denom = n * (n - 1) / 2.0
+    tau = S / denom if denom else 0.0
+    # Var(S) (ties 무시)
+    varS = (n * (n - 1) * (2 * n + 5)) / 18.0
+    if varS == 0:
+        return {"tau": tau, "z": 0.0, "p": 1.0}
+    z = (S - 1) / sqrt(varS) if S > 0 else (S + 1) / sqrt(varS) if S < 0 else 0.0
+    p = 2.0 * (1.0 - _phi(abs(z)))
+    return {"tau": float(tau), "z": float(z), "p": float(max(min(p, 1.0), 0.0))}
+
+def theil_sen_slope(y: pd.Series) -> Optional[float]:
+    """
+    Theil–Sen: 모든 (j>i) 쌍의 (y[j]-y[i])/(j-i) 중앙값.
+    y: 시계열 값(시간 순 정렬). 길이 n<2이면 None.
+    반환: 월당 증가액(기준통화 단위).
+    """
+    y = y.dropna()
+    n = len(y)
+    if n < 2:
+        return None
+    vals = y.values
+    slopes = []
+    for i in range(n - 1):
+        dy = vals[i + 1:] - vals[i]
+        dx = (pd.Series(range(i + 1, n)).values - i).astype(float)  # 월 간격: 1,2,...
+        slopes.extend((dy / dx).tolist())
+    return float(pd.Series(slopes).median()) if slopes else None
+
+def monthly_spend_series(conn, base: str = "KRW", months: int = 24, category: Optional[str] = None) -> pd.Series:
+    """
+    최근 'months'개월의 월별 지출 합계(기준통화) 시계열을 반환.
+    category 지정 시 해당 카테고리만 필터. 없으면 전체 지출.
+    index: 'YYYY-MM' 문자열, value: 금액(float)
+    """
+    # ── 기간 경계(UTC) 계산
+    now_utc = datetime.now(timezone.utc)
+    start_utc = now_utc - pd.Timedelta(days=31 * months)
+    start_iso = start_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_iso = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # ── 참조용 pandas Timestamp (to_period 사용 위해)
+    now_ts = pd.Timestamp(now_utc)  # ✅ pandas Timestamp로 변환
+    start_period = (now_ts - pd.DateOffset(months=months - 1)).to_period("M")
+    end_period = now_ts.to_period("M")
+    full_idx = pd.period_range(start=start_period, end=end_period, freq="M").astype(str)
+
+    df = _fetch_txns(conn, start_iso, end_iso)
+    if df.empty:
+        return pd.Series([0.0] * len(full_idx), index=full_idx)
+
+    # 지출만, 카테고리 필터
+    df = df[df["direction"] == "debit"].copy()
+    if category:
+        df = df[df["category"] == category]
+    if df.empty:
+        return pd.Series([0.0] * len(full_idx), index=full_idx)
+
+    # 기준통화 환산
+    conv = []
+    for _, r in df.iterrows():
+        v = _convert_amount(conn, float(r["amount"]), str(r["currency"]), base, r["date_utc"])
+        conv.append(v)
+    df["amount_base"] = conv
+    df = df.dropna(subset=["amount_base"]).copy()
+    if df.empty:
+        return pd.Series([0.0] * len(full_idx), index=full_idx)
+
+    # 월(YYYY-MM)로 집계
+    df["ym"] = pd.to_datetime(df["date_utc"]).dt.to_period("M").astype(str)
+    s = df.groupby("ym")["amount_base"].sum().sort_index()
+
+    # 빈 달 0 채우기
+    s = s.reindex(full_idx, fill_value=0.0)
+    return s
+
+def trend_summary(conn, base: str, months: int, category: Optional[str] = None) -> Dict[str, Optional[float]]:
+    """
+    월별 시계열 → Mann–Kendall(τ,p) + Theil–Sen(slope) + 최근/평균.
+    slope 단위: 기준통화/월.
+    """
+    s = monthly_spend_series(conn, base=base, months=months, category=category)
+    mk = mann_kendall(s)
+    slope = theil_sen_slope(s)
+    res = {
+        "last": float(s.iloc[-1]) if len(s) else None,
+        "mean": float(s.mean()) if len(s) else None,
+        "tau": mk["tau"] if mk else None,
+        "p": mk["p"] if mk else None,
+        "slope": slope
+    }
+    return res

@@ -1,77 +1,61 @@
-# app/pages/2_Trends.py
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
-
 import pandas as pd
 import streamlit as st
 
 from ledger.db import bootstrap
-from ledger.analytics import monthly_category_totals, summarize_trends
+from ledger.analytics import monthly_spend_series, trend_summary
 
-st.title("📈 Trends & Analytics")
+st.title("📈 Trends (Non-parametric)")
 
 DB_PATH = str(Path(__file__).resolve().parents[1] / "db.sqlite3")
 conn = bootstrap(DB_PATH)
 
-# Controls
 col1, col2, col3 = st.columns(3)
 with col1:
-    base = st.selectbox("기준 통화 (Base)", ["KRW", "USD"], index=0)
+    base = st.selectbox("Base currency", ["KRW","USD"], index=0, help="FX 캐시 기준으로 환산")
 with col2:
-    months_back = st.slider("분석 범위(개월)", min_value=3, max_value=24, value=12, step=1)
+    months = st.slider("Lookback (months)", min_value=6, max_value=48, value=18, step=1)
 with col3:
-    end_dt = datetime.now(timezone.utc)
-    start_dt = end_dt - timedelta(days=months_back * 31)
-    st.write(f"범위: {start_dt.date()} ~ {end_dt.date()}")
+    # 최근 사용 카테고리 후보 추출
+    # 간단히 전체 시계열에서 조회된 카테고리 목록을 뽑기보다 사용자 입력형으로 유지
+    category = st.text_input("Filter by category (optional)", value="")
 
-start_iso = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-end_iso = end_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+# 시계열 생성
+series = monthly_spend_series(conn, base=base, months=months, category=(category or None))
+summ = trend_summary(conn, base=base, months=months, category=(category or None))
 
-cat_points = monthly_category_totals(conn, base=base, start_iso=start_iso, end_iso=end_iso)
-summary = summarize_trends(cat_points)
+# 라벨링 로직
+def label_trend(summ):
+    tau, p, slope = summ.get("tau"), summ.get("p"), summ.get("slope")
+    if tau is None or p is None or slope is None:
+        return "Insufficient data (n<3)"
+    signif = (p < 0.05)
+    if signif and slope > 0:
+        return "📈 Increasing (significant)"
+    if signif and slope < 0:
+        return "📉 Decreasing (significant)"
+    if not signif and slope > 0:
+        return "↗ Weak increase (ns)"
+    if not signif and slope < 0:
+        return "↘ Weak decrease (ns)"
+    return "— Flat"
 
-if not summary:
-    st.info("표시할 데이터가 없습니다. Import 페이지에서 CSV를 추가해 주세요.")
-    st.stop()
+colA, colB, colC, colD = st.columns(4)
+colA.metric("Last month", f"{(summ['last'] or 0.0):,.0f} {base}")
+colB.metric("Avg (window)", f"{(summ['mean'] or 0.0):,.0f} {base}")
+colC.metric("τ (MK)", "—" if summ["tau"] is None else f"{summ['tau']:.2f}")
+colD.metric("p-value", "—" if summ["p"] is None else f"{summ['p']:.3f}")
 
-# Chart: stacked bars by month (top N categories)
-N = st.slider("상위 카테고리 N", 3, 10, 5)
-top_cats = [s.category for s in summary[:N]]
+slope_val = summ.get("slope")
+slope_text = "—" if slope_val is None else f"{slope_val:.0f} {base}/mo"
+st.info(f"Trend: **{label_trend(summ)}**  •  Theil–Sen slope ≈ **{slope_text}**")
 
-# Build a pivot table: rows=month, cols=category, values=amount
-rows = []
-for cat, pts in cat_points.items():
-    if cat not in top_cats:
-        continue
-    for p in pts:
-        rows.append({"month": p.month, "category": cat, "amount": p.value})
-df = pd.DataFrame(rows)
-pivot = df.pivot_table(index="month", columns="category", values="amount", aggfunc="sum").fillna(0.0)
-pivot = pivot.sort_index()
+st.subheader("Monthly spend (base)")
+# 시각화용 DataFrame
+df = pd.DataFrame({"month": series.index, f"spend_{base}": series.values})
+st.line_chart(df.set_index("month"))
 
-st.subheader("월별 합계 (상위 카테고리)")
-st.bar_chart(pivot)
-
-# Table: trend badges (MoM %, Theil–Sen per month, MK)
-def _mk_badge(tau, p):
-    if tau is None or p is None:
-        return "—"
-    if p < 0.1:
-        return "↑ (p<0.1)" if tau > 0 else "↓ (p<0.1)"
-    return "—"
-
-table = []
-for s in summary:
-    vals = [p.value for p in s.months]
-    latest = vals[-1] if vals else 0.0
-    table.append({
-        "Category": s.category,
-        f"Latest ({base})": latest,
-        "MoM %": None if s.mom_pct is None else round(s.mom_pct, 1),
-        "Theil–Sen (/mo)": None if s.theil_sen_per_month is None else round(s.theil_sen_per_month, 2),
-        "MK": _mk_badge(s.mk_tau, s.mk_pvalue),
-    })
-
-st.subheader("트렌드 요약")
-st.dataframe(pd.DataFrame(table))
-st.caption("MK: Mann–Kendall. p<0.1인 경우만 ↑/↓로 표시 (표본 적을 때는 —). Theil–Sen은 월당 변화량.")
+st.caption(
+    "Mann–Kendall: τ는 순위 기반 상관계수(−1~+1), p<0.05면 통계적으로 유의한 추세.\n"
+    "Theil–Sen: 이상치에 강인한 중앙 기울기(월당 금액 변화량)."
+)
