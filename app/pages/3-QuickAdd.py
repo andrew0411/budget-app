@@ -2,10 +2,12 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 import streamlit as st
+from app.ui import inject_css, fmt_money
 
 from ledger.db import bootstrap, ensure_default_accounts, add_transaction, get_accounts
 
 st.title("⚡ Quick Add")
+inject_css()
 
 DB_PATH = str(Path(__file__).resolve().parents[1] / "db.sqlite3")
 conn = bootstrap(DB_PATH)
@@ -74,5 +76,5 @@ if submit:
         payee=payee or None,
         notes=notes or None,
     )
-    st.success("Saved! Enter 키로 다음 입력을 이어갈 수 있어요.")
+    st.success(f"Saved {fmt_money(amount, currency)} to account {account_id}. Enter 키로 다음 입력을 이어갈 수 있어요.")
     st.experimental_rerun()

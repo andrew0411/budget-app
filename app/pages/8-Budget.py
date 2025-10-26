@@ -4,11 +4,13 @@ from datetime import datetime
 
 import streamlit as st
 import pandas as pd
+from app.ui import inject_css, fmt_money
 
 from ledger.db import bootstrap, list_budgets, upsert_budget
 from ledger.analytics import month_actuals_by_category
 
 st.title("📊 Budget vs Actual")
+inject_css()
 
 DB_PATH = str(Path(__file__).resolve().parents[1] / "db.sqlite3")
 conn = bootstrap(DB_PATH)
@@ -22,7 +24,7 @@ with col2:
 with col3:
     month = st.number_input("월", min_value=1, max_value=12, value=now.month, step=1)
 
-# 예산 입력/수정
+# ── 예산 입력/수정 ───────────────────────────────────────────────────────────
 st.subheader("예산 설정")
 budgets = list_budgets(conn, month=f"{year:04d}-{month:02d}")
 existing = {(b["category"], b["currency"]): float(b["amount"]) for b in budgets}
@@ -39,13 +41,13 @@ if st.button("Save budgets"):
     saved = 0
     for _, r in edited.iterrows():
         cat = str(r["Category"])
-        amt = float(r[f"Budget ({base})"] or 0.0)
+        amt = float(r.get(f"Budget ({base})") or 0.0)
         if amt > 0:
             upsert_budget(conn, category=cat, amount=amt, currency=base, month=f"{year:04d}-{month:02d}")
             saved += 1
     st.success(f"Saved/updated {saved} budget row(s).")
 
-# 실적 계산
+# ── 실적 계산 ────────────────────────────────────────────────────────────────
 st.subheader("이번 달 실적")
 actuals = month_actuals_by_category(conn, base=base, year=int(year), month=int(month))
 
@@ -68,10 +70,28 @@ for _, r in edited.iterrows():
             badge = "🟠 80%+"
         else:
             badge = "🟢 OK"
-    progress.append({"Category": cat, f"Actual ({base})": round(a,2), f"Budget ({base})": b, "Progress": (None if pct is None else round(pct,1)), "Status": badge})
+    progress.append({
+        "Category": cat,
+        "Actual_raw": a,
+        "Budget_raw": b,
+        "Progress": (None if pct is None else round(pct, 1)),
+        "Status": badge
+    })
 
-st.dataframe(pd.DataFrame(progress), use_container_width=True)
-st.metric("Total Actual", f"{total_actual:,.2f} {base}")
-st.metric("Total Budget", f"{total_budget:,.2f} {base}")
+df_prog = pd.DataFrame(progress)
+
+# 표시용 포맷 컬럼 추가 (원본 숫자 유지)
+if not df_prog.empty:
+    df_show = df_prog.copy()
+    df_show[f"Actual ({base})"] = df_show["Actual_raw"].map(lambda x: fmt_money(float(x or 0.0), base))
+    df_show[f"Budget ({base})"] = df_show["Budget_raw"].map(lambda x: fmt_money(float(x or 0.0), base))
+    df_show = df_show[["Category", f"Actual ({base})", f"Budget ({base})", "Progress", "Status"]]
+    st.dataframe(df_show, use_container_width=True)
+else:
+    st.dataframe(df_prog, use_container_width=True)
+
+# 상단 요약 메트릭 (일관 포맷)
+st.metric("Total Actual", fmt_money(total_actual, base))
+st.metric("Total Budget", fmt_money(total_budget, base))
 if total_budget > 0:
     st.metric("Total Progress", f"{total_actual/total_budget*100:,.1f}%")

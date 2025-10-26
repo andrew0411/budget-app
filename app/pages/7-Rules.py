@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import streamlit as st
+from app.ui import inject_css
 
 from ledger.db import (
     bootstrap,
@@ -13,6 +14,7 @@ from ledger.db import (
 from ledger.rules import apply_category_rules
 
 st.title("🧩 Category Rules")
+inject_css()
 
 # 모든 페이지가 루트 db.sqlite3를 보도록 고정
 DB_PATH = str(Path(__file__).resolve().parents[1] / "db.sqlite3")

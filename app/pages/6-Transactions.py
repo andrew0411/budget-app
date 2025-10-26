@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 import streamlit as st
 
+from app.ui import inject_css, fmt_money
 from ledger.db import (
     bootstrap, list_transactions_joined, update_transaction, soft_delete_transaction,
     get_accounts  # ✅ get_accounts_full 대신 사용
@@ -11,6 +12,7 @@ from ledger.db import (
 from ledger.rules import apply_category_rules  # 선택: 룰 재적용 버튼용
 
 st.title("🧾 Transactions — Edit & Delete")
+inject_css()
 
 DB_PATH = str(Path(__file__).resolve().parents[1] / "db.sqlite3")
 conn = bootstrap(DB_PATH)
@@ -25,17 +27,25 @@ with col3:
 
 end = datetime.now(timezone.utc)
 start = end - timedelta(days=days)
-rows = list_transactions_joined(conn,
-                                start_iso=start.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                                end_iso=end.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                                include_deleted=include_deleted,
-                                limit=int(limit))
+rows = list_transactions_joined(
+    conn,
+    start_iso=start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    end_iso=end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    include_deleted=include_deleted,
+    limit=int(limit),
+)
 
 if not rows:
     st.info("No transactions in range.")
     st.stop()
 
 df = pd.DataFrame([dict(r) for r in rows])  # dict로 변환하여 안전 조작
+
+# 보기용 금액 포맷 컬럼 추가 (에디터에서는 읽기 전용)
+df["amount_fmt"] = df.apply(
+    lambda r: fmt_money(float(r.get("amount") or 0.0), str(r.get("currency") or "")),
+    axis=1,
+)
 
 # 계정 셀렉트 옵션 구성 (get_accounts → dict 변환 후 안전 라벨)
 acc_rows = [dict(r) for r in get_accounts(conn)]
@@ -60,8 +70,14 @@ df["account_label"] = df["account_id"].map(lambda x: id2label.get(int(x), str(x)
 st.caption("Tip: Account 드롭다운으로 계정 변경, Delete/Undelete 체크 후 각 버튼으로 일괄 적용.")
 
 edited = st.data_editor(
-    df[["id", "date_utc", "amount", "currency", "account_label", "institution", "direction", "category", "payee", "notes", "is_deleted", "delete", "undelete"]],
+    df[[
+        "id", "date_utc", "amount", "amount_fmt", "currency",
+        "account_label", "institution", "direction", "category", "payee", "notes",
+        "is_deleted", "delete", "undelete"
+    ]],
     column_config={
+        "amount": st.column_config.NumberColumn("Amount (raw)", disabled=True),
+        "amount_fmt": st.column_config.TextColumn("Amount", disabled=True),
         "account_label": st.column_config.SelectboxColumn(
             "Account",
             options=list(acc_options.keys()),
@@ -72,7 +88,7 @@ edited = st.data_editor(
         "undelete": st.column_config.CheckboxColumn("Undelete?"),
     },
     hide_index=True,
-    disabled=["id", "date_utc", "amount", "currency", "institution", "is_deleted"],
+    disabled=["id", "date_utc", "currency", "institution", "is_deleted"],
     use_container_width=True,
     key="txn_editor_v2",
 )

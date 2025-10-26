@@ -5,36 +5,50 @@ from datetime import datetime, timezone
 import pandas as pd
 import streamlit as st
 
+from app.ui import (
+    inject_css, metric_card, chip, bar_chart,
+    get_dark_mode, set_dark_mode, fmt_money
+)
 from ledger.db import bootstrap, balances_in_base, list_budgets
 from ledger.analytics import mtd_spend, month_actuals_by_category
 
 st.title("🏠 Dashboard")
 
+# ── Dark mode toggle + global CSS ────────────────────────────────────────────
+with st.sidebar:
+    dark = st.checkbox("🌙 Dark mode", value=get_dark_mode())
+    set_dark_mode(dark)
+inject_css()
+
+# ── DB bootstrap ─────────────────────────────────────────────────────────────
 DB_PATH = str(Path(__file__).resolve().parents[1] / "db.sqlite3")
 conn = bootstrap(DB_PATH)
 
-col0, col1 = st.columns([1,1])
+# ── 기준 통화 선택 ──────────────────────────────────────────────────────────
+col0, col1 = st.columns([1, 1])
 with col0:
     base = st.radio("기준 통화", ["KRW", "USD"], horizontal=True, index=0)
 with col1:
     st.write(" ")
 
-# ── 상단 메트릭: 총자산 / 이번달 지출 ─────────────────────────────────────────
+# ── 상단 메트릭: 총자산 / 이번달 지출 ───────────────────────────────────────
 now_utc = datetime.now(timezone.utc)
 bal = balances_in_base(conn, base=base)
 total_assets = bal["total_base"]
 mtd = mtd_spend(conn, base=base, now_utc=now_utc)
 
 c1, c2 = st.columns(2)
-c1.metric("Total Assets", f"{total_assets:,.2f} {base}")
-c2.metric("Month-to-date Spend", f"{mtd:,.2f} {base}")
+with c1:
+    metric_card("Total Assets", fmt_money(total_assets, base))
+with c2:
+    metric_card("Month-to-date Spend", fmt_money(mtd, base))
 
 st.divider()
 
-# ── Budget vs Actual (이 달) 요약 ────────────────────────────────────────────
+# ── Budget vs Actual (이 달) 요약 ───────────────────────────────────────────
 st.subheader("📊 Budget summary (this month)")
 
-now_local = datetime.now()   # month_actuals_by_category 내부에서 UTC 변환 처리
+now_local = datetime.now()  # month_actuals_by_category 내부에서 UTC 처리
 year, month = now_local.year, now_local.month
 
 # 실제 지출 합(기준통화) by category
@@ -43,7 +57,7 @@ actuals = month_actuals_by_category(conn, base=base, year=year, month=month)
 # 예산: 해당 월 지정 + 공통(월 NULL) 모두 로드
 brows = list_budgets(conn, month=f"{year:04d}-{month:02d}")
 
-# 예산 dict (해당 월 지정 우선 → 없으면 공통), 통화는 선택한 base만 사용
+# 예산 dict (해당 월 지정 우선 → 없으면 공통)
 monthly_key = f"{year:04d}-{month:02d}"
 budget_dict = {}
 # 1) 월 지정
@@ -64,12 +78,12 @@ over_list = []
 
 for cat in cats:
     a = float(actuals.get(cat, 0.0))
-    b = float(budget_dict.get(cat, 0.0))
+    bgt = float(budget_dict.get(cat, 0.0))
     total_actual += a
-    total_budget += b
-    pct = (a / b * 100.0) if b > 0 else None
-    if b > 0 and a > b:
-        over_list.append((cat, a - b))
+    total_budget += bgt
+    pct = (a / bgt * 100.0) if bgt > 0 else None
+    if bgt > 0 and a > bgt:
+        over_list.append((cat, a - bgt))
     status = "—"
     if pct is not None:
         if pct >= 100:
@@ -80,8 +94,8 @@ for cat in cats:
             status = "🟢 OK"
     rows.append({
         "Category": cat,
-        f"Budget ({base})": b,
-        f"Actual ({base})": a,
+        "Budget": fmt_money(bgt, base),
+        "Actual": fmt_money(a, base),
         "Progress %": (None if pct is None else round(pct, 1)),
         "Status": status,
     })
@@ -90,10 +104,10 @@ if rows:
     df_prog = pd.DataFrame(rows)
     st.dataframe(df_prog, use_container_width=True)
 
-    # 요약 배지
+    # 요약 배지/메트릭
     c3, c4, c5 = st.columns(3)
-    c3.metric("Total Budget", f"{total_budget:,.0f} {base}")
-    c4.metric("Total Actual", f"{total_actual:,.0f} {base}")
+    c3.metric("Total Budget", fmt_money(total_budget, base))
+    c4.metric("Total Actual", fmt_money(total_actual, base))
     if total_budget > 0:
         c5.metric("Total Progress", f"{(total_actual/total_budget*100):,.1f}%")
     else:
@@ -101,7 +115,7 @@ if rows:
 
     if over_list:
         over_list.sort(key=lambda x: x[1], reverse=True)
-        top = ", ".join([f"{c} (+{d:,.0f} {base})" for c, d in over_list[:3]])
+        top = ", ".join([f"{c} (+{fmt_money(d, base)})" for c, d in over_list[:3]])
         st.warning(f"과다 지출 카테고리: {top}")
     else:
         st.success("✅ 이 달은 아직 예산 초과가 없습니다.")
@@ -113,17 +127,25 @@ st.divider()
 # ── 계정별 잔액 표/차트 ────────────────────────────────────────────────────
 st.subheader("계정별 잔액")
 
-rows = []
+# 표는 보기 좋게 포맷된 문자열로, 차트는 별도 숫자 DataFrame으로 처리
+table_rows = []
+plot_rows = []
 for it in bal["items"]:
-    rows.append({
+    table_rows.append({
         "Account": it["name"],
         "Currency": it["currency"],
-        "Balance (native)": it["balance_native"],
-        f"Balance ({base})": it["balance_base"],
+        "Balance (native)": fmt_money(it["balance_native"], it["currency"]),
+        f"Balance ({base})": fmt_money(it["balance_base"], base),
     })
-df = pd.DataFrame(rows)
-st.dataframe(df, use_container_width=True)
+    plot_rows.append({
+        "Account": it["name"],
+        "Balance": float(it["balance_base"] or 0.0),
+    })
+
+df_table = pd.DataFrame(table_rows)
+st.dataframe(df_table, use_container_width=True)
 
 st.subheader("계정별 잔액 (기준 통화)")
-chart_df = df[["Account", f"Balance ({base})"]].set_index("Account").fillna(0.0)
-st.bar_chart(chart_df)
+df_plot = pd.DataFrame(plot_rows)
+# 커스텀 파스텔 바 차트(Altair)
+bar_chart(df_plot, x="Account", y="Balance")

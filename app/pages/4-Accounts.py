@@ -1,9 +1,11 @@
 from pathlib import Path
 import streamlit as st
 
+from app.ui import inject_css, fmt_money
 from ledger.db import bootstrap, add_account, get_accounts
 
 st.title("🏦 Accounts (Banks/Cards)")
+inject_css()
 
 DB_PATH = str(Path(__file__).resolve().parents[1] / "db.sqlite3")
 conn = bootstrap(DB_PATH)
@@ -21,8 +23,17 @@ with st.form("add_account"):
         opening_balance = st.number_input("Opening balance", value=0.0, step=100.0, format="%.2f")
     submitted = st.form_submit_button("Create")
     if submitted:
-        add_account(conn, name=name, institution=institution, currency=currency, type=acc_type, opening_balance=opening_balance)
-        st.success("Account created.")
+        add_account(
+            conn,
+            name=name,
+            institution=institution,
+            currency=currency,
+            type=acc_type,
+            opening_balance=opening_balance,
+        )
+        st.success(f"Account created: {name or '(no name)'} • "
+                   f"{institution or '(no bank)'} • "
+                   f"{fmt_money(opening_balance, currency)}")
         st.experimental_rerun()
 
 st.subheader("Existing Accounts")
@@ -32,12 +43,15 @@ if rows:
     table = []
     for r in rows:
         rd = dict(r)
+        cur = str(rd.get("currency", "")).upper()
         table.append({
             "id": int(rd["id"]),
             "name": rd.get("name") or "",
             "institution": rd.get("institution") or "",
-            "currency": str(rd.get("currency", "")).upper(),
+            "currency": cur,
             "type": rd.get("type") or "",
+            # opening_balance가 있으면 보기 좋게 포맷해서 표시
+            "opening balance": fmt_money(float(rd.get("opening_balance") or 0.0), cur),
         })
     st.table(table)
 else:

@@ -1,6 +1,6 @@
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-
+from app.ui import inject_css
 import streamlit as st
 
 from ledger.db import (
@@ -17,7 +17,8 @@ from ledger.backup import ensure_daily_backup, create_backup, list_backups
 
 st.set_page_config(page_title="Budget App", page_icon="💸", layout="wide")
 
-st.title("💸 Budget App (Pastel Ledger)")
+st.title("💸 Budget App")
+inject_css()
 st.caption("Local-first, beginner-friendly personal finance tracker")
 
 # --- DB bootstrap ---

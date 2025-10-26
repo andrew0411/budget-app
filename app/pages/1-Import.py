@@ -1,7 +1,9 @@
+# app/pages/1-Import.py
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+from app.ui import inject_css, fmt_money
 
 from ledger.rules import apply_category_rules
 from ledger.db import bootstrap, ensure_default_accounts, add_transaction
@@ -16,6 +18,7 @@ from ledger.importer import (
 
 # 페이지 파일에서는 set_page_config를 다시 호출하지 않는 것을 권장
 st.title("📥 CSV Import")
+inject_css()  # 라이트 테마 CSS (다크모드 없음)
 
 DB_PATH = str(Path(__file__).resolve().parents[1] / "db.sqlite3")
 conn = bootstrap(DB_PATH)
@@ -35,6 +38,7 @@ except Exception as e:
     st.stop()
 
 st.subheader("미리보기 (상위 50행)")
+st.caption(f"로드된 행 수: {len(df):,} rows")
 st.dataframe(df.head(50))
 
 # --- 컬럼 매핑 ---
@@ -112,11 +116,10 @@ if st.button("Dry-run (계정 매핑+중복 감지)"):
 
             # ✅ (선택) 룰을 사용한 카테고리 자동 분류
             if apply_rules:
-                inst_hint_str = inst_hint  # 이미 문자열 또는 None
                 cat2 = apply_category_rules(
                     conn,
                     payee=t.get("payee"),
-                    institution=inst_hint_str
+                    institution=(inst_hint if inst_hint else None),
                 )
                 if cat2:
                     t["category"] = cat2  # 룰 매칭 시 CSV 카테고리를 덮어씀
@@ -139,8 +142,24 @@ if st.button("Dry-run (계정 매핑+중복 감지)"):
 
     st.success(f"총 {len(marked_all)}건 변환됨. (룰 적용·계정 라우팅·중복 감지 완료)")
     st.write("중복(duplicate)이 True인 행은 기본적으로 삽입하지 않습니다.")
-    preview_cols = ["date_utc", "amount", "currency", "category", "payee", "direction", "account_id", "duplicate"]
-    st.dataframe(pd.DataFrame(marked_all)[preview_cols].head(100))
+
+    # ── 미리보기(가독성): 금액 포맷 컬럼 추가 ─────────────────────────────────
+    preview_df = pd.DataFrame(marked_all)
+    if not preview_df.empty:
+        preview_df["amount_fmt"] = preview_df.apply(
+            lambda r: fmt_money(r.get("amount"), (str(r.get("currency")) if r.get("currency") else "KRW")),
+            axis=1
+        )
+        preview_cols = [
+            "date_utc", "amount", "amount_fmt", "currency",
+            "category", "payee", "direction", "account_id", "duplicate"
+        ]
+        for c in preview_cols:
+            if c not in preview_df.columns:
+                preview_df[c] = None
+        st.dataframe(preview_df[preview_cols].head(100), use_container_width=True)
+    else:
+        st.dataframe(preview_df.head(100), use_container_width=True)
 
     insert_mode = st.radio("삽입 모드", ["중복 제외(권장)", "중복도 강제 삽입"])
     if st.button("DB에 삽입"):
