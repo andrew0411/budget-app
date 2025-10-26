@@ -105,7 +105,7 @@ def count_rows(conn: sqlite3.Connection, table: str) -> int:
 
 # ---------- Helpers for import/duplicate detection ----------
 def get_accounts(conn: sqlite3.Connection) -> List[sqlite3.Row]:
-    # Manage 탭에서 필요로 하는 모든 필드 포함
+    # Manage 탭에서 필요로 하는 모든 필드를 포함해서 반환
     return conn.execute(
         "SELECT id, name, institution, currency, type, opening_balance FROM accounts ORDER BY id"
     ).fetchall()
@@ -138,11 +138,33 @@ def get_or_create_account(conn: sqlite3.Connection, *, name: str, currency: str,
     return cur.lastrowid
 
 def ensure_default_accounts(conn: sqlite3.Connection, currencies=("KRW","USD")) -> dict:
-    """Ensure default per-currency accounts exist. Returns {currency: account_id}."""
-    mapping = {}
+    """
+    계정 테이블이 '비어 있을 때'만 각 통화의 기본 계정(Default {CUR})을 생성한다.
+    이미 계정이 하나라도 있으면 '생성하지 않으며', 존재하는 기본 계정만 매핑에 담아 돌려준다.
+
+    반환값 예: {"KRW": 3, "USD": 5} (존재하는 기본 계정만 포함될 수 있음)
+    """
+    mapping: Dict[str, int] = {}
+
+    # 1) 계정 테이블이 비어 있을 때만 생성
+    if count_rows(conn, "accounts") == 0:
+        for cur in currencies:
+            cur_u = cur.upper()
+            aid = get_or_create_account(
+                conn, name=f"Default {cur_u}", currency=cur_u, type="cash", opening_balance=0.0
+            )
+            mapping[cur_u] = aid
+        return mapping
+
+    # 2) 비어 있지 않으면 생성하지 않음. 존재하는 기본 계정만 매핑
     for cur in currencies:
-        aid = get_or_create_account(conn, name=f"Default {cur}", currency=cur, type="cash", opening_balance=0.0)
-        mapping[cur.upper()] = aid
+        cur_u = cur.upper()
+        row = conn.execute(
+            "SELECT id FROM accounts WHERE name=? AND currency=? LIMIT 1",
+            (f"Default {cur_u}", cur_u)
+        ).fetchone()
+        if row:
+            mapping[cur_u] = int(row["id"])
     return mapping
 
 def upsert_fx_cache_many(conn: sqlite3.Connection,
