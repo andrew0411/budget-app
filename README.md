@@ -56,6 +56,19 @@ If you want USD→KRW FX via FRED (series DEXKOUS):
 FRED_API_KEY=YOUR_FRED_API_KEY
 ```
 
+## 📄 CSV Import Tips
+
+**Minimum required columns**: `Date`, `Amount`
+
+**Helpful optional columns**: `Currency (KRW/USD)`, `Payee`, `Category`, `Account`, `Institution`
+
+**Duplicates**: checked per account using (date, amount, category, payee)
+
+**Rules**: auto-classify category from `Payee`/`Institution` if enabled
+
+**Auto-create accounts**: uses hints from `Account`/`Institution`/`Payee` (optional toggle on the page)
+
+
 ## Tests
 ```bash
 conda run -n streamlit-app python -m pytest -q
