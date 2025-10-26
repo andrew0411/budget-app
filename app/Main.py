@@ -43,16 +43,27 @@ with st.sidebar:
     with st.expander("FX · USD→KRW", expanded=True):
         latest = get_latest_fx(conn, "USD", "KRW")
         col_fx, col_btn = st.columns([2, 1])
-        with col_fx:
-            if latest:
-                metric_card(
-                    "USD→KRW",
-                    fmt_money(latest["rate"], "KRW"),
-                    sub=f"As of {latest['date_utc']} • {latest['source']}",
-                )
-            else:
-                st.warning("No FX cached yet.")
 
+        # ① FX 표시 전용 플레이스홀더
+        with col_fx:
+            fx_box = st.empty()
+
+            def render_fx(info):
+                fx_box.empty()
+                with fx_box.container():
+                    if info:
+                        metric_card(
+                            "USD→KRW",
+                            fmt_money(info["rate"], "KRW"),
+                            sub=f"As of {info['date_utc']} • {info['source']}",
+                        )
+                    else:
+                        st.warning("No FX cached yet.")
+
+            # 최초 1회 렌더
+            render_fx(latest)
+
+        # ② 버튼 클릭 시 DB 갱신 후, 같은 플레이스홀더에 재렌더 (중복 방지)
         with col_btn:
             if st.button("Fetch latest", help="Fetch last ~14 days from FRED (DEXKOUS)"):
                 try:
@@ -64,14 +75,9 @@ with st.sidebar:
                     st.toast(f"FX updated: {n} row(s)", icon="✅")
                 except Exception as e:
                     st.error(f"Fetch failed: {e}")
-                # 새로고침용 재표시
+                # 갱신 후 재조회 → 같은 박스에 덮어쓰기
                 latest = get_latest_fx(conn, "USD", "KRW")
-                if latest:
-                    metric_card(
-                        "USD→KRW",
-                        fmt_money(latest["rate"], "KRW"),
-                        sub=f"As of {latest['date_utc']} • {latest['source']}",
-                    )
+                render_fx(latest)
 
     st.divider()
 
