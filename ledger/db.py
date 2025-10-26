@@ -1,6 +1,6 @@
 from pathlib import Path
 import sqlite3
-from typing import Optional, List
+from typing import Optional, List, Iterable, Tuple, Dict
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -143,3 +143,29 @@ def ensure_default_accounts(conn: sqlite3.Connection, currencies=("KRW","USD")) 
         aid = get_or_create_account(conn, name=f"Default {cur}", currency=cur, type="cash", opening_balance=0.0)
         mapping[cur.upper()] = aid
     return mapping
+def upsert_fx_cache_many(conn: sqlite3.Connection,
+                         rows: Iterable[Tuple[str, str, str, float, str]]) -> int:
+    """
+    rows: iterable of (date_utc(YYYY-MM-DD), base, quote, rate, source)
+    """
+    n = 0
+    for d, base, quote, rate, src in rows:
+        conn.execute(
+            """INSERT INTO fx_cache(date_utc, base, quote, rate, source)
+               VALUES(?,?,?,?,?)
+               ON CONFLICT(date_utc, base, quote)
+               DO UPDATE SET rate=excluded.rate, source=excluded.source,
+                             retrieved_at_utc=(strftime('%Y-%m-%dT%H:%M:%SZ','now'))""",
+            (d, base.upper(), quote.upper(), float(rate), src),
+        )
+        n += 1
+    conn.commit()
+    return n
+
+def get_latest_fx(conn: sqlite3.Connection, base: str, quote: str) -> Optional[sqlite3.Row]:
+    return conn.execute(
+        """SELECT date_utc, rate, source FROM fx_cache
+           WHERE base=? AND quote=?
+           ORDER BY date_utc DESC LIMIT 1""",
+        (base.upper(), quote.upper()),
+    ).fetchone()
