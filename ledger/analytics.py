@@ -247,3 +247,51 @@ def mtd_spend(conn: sqlite3.Connection, base: str, now_utc: Optional[datetime] =
         if v is not None:
             conv_vals.append(v)
     return float(sum(conv_vals)) if conv_vals else 0.0
+
+def _fetch_txns_joined(conn: sqlite3.Connection, start_iso: Optional[str], end_iso: Optional[str]) -> pd.DataFrame:
+    q = """
+    SELECT t.date_utc, t.amount, t.currency, t.category, t.direction,
+           a.institution, a.name AS account_name
+    FROM transactions t
+    JOIN accounts a ON a.id = t.account_id
+    WHERE t.is_deleted=0
+    """
+    args = []
+    if start_iso:
+        q += " AND t.date_utc >= ?"
+        args.append(start_iso)
+    if end_iso:
+        q += " AND t.date_utc <= ?"
+        args.append(end_iso)
+
+    df = pd.read_sql_query(q, conn, params=args)
+    if df.empty:
+        return df
+    df["date_utc"] = pd.to_datetime(df["date_utc"], utc=True)
+    return df
+
+def spend_by_institution(conn: sqlite3.Connection, base: str,
+                         start_iso: Optional[str], end_iso: Optional[str]) -> pd.DataFrame:
+    """
+    기관(institution)별 지출 합계/건수 (direction='debit'만), 기준 통화로 환산하여 반환.
+    Columns: institution, amount_base, count
+    """
+    df = _fetch_txns_joined(conn, start_iso, end_iso)
+    if df.empty:
+        return df
+
+    df = df[df["direction"]=="debit"].copy()
+    conv = []
+    for _, r in df.iterrows():
+        v = _convert_amount(conn, float(r["amount"]), str(r["currency"]), base, r["date_utc"])
+        if v is not None:
+            conv.append(v)
+        else:
+            conv.append(float("nan"))
+    df["amount_base"] = conv
+    df = df.dropna(subset=["amount_base"])
+    grp = df.groupby(df["institution"].fillna("Unknown"), as_index=False).agg(
+        amount_base=("amount_base","sum"), count=("amount_base","count")
+    )
+    grp = grp.sort_values("amount_base", ascending=False)
+    return grp

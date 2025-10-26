@@ -255,3 +255,81 @@ def balances_in_base(conn: sqlite3.Connection, base: str = "KRW", as_of_iso: Opt
             total += base_val
 
     return {"items": result, "total_base": total}
+
+def list_transactions_joined(conn: sqlite3.Connection, *,
+                             start_iso: Optional[str] = None,
+                             end_iso: Optional[str] = None,
+                             include_deleted: bool = False,
+                             limit: int = 300) -> List[sqlite3.Row]:
+    clauses = ["1=1"]
+    params: List[Any] = []
+    if not include_deleted:
+        clauses.append("t.is_deleted=0")
+    if start_iso:
+        clauses.append("t.date_utc >= ?")
+        params.append(start_iso)
+    if end_iso:
+        clauses.append("t.date_utc <= ?")
+        params.append(end_iso)
+
+    where_sql = " AND ".join(clauses)
+    q = f"""
+    SELECT t.id, t.date_utc, t.amount, t.currency, t.category, t.payee, t.direction, t.notes,
+           t.account_id, t.is_deleted,
+           a.name AS account_name, a.institution, a.currency AS account_currency
+    FROM transactions t
+    JOIN accounts a ON a.id = t.account_id
+    WHERE {where_sql}
+    ORDER BY t.date_utc DESC
+    LIMIT ?
+    """
+    params.append(int(limit))
+    return conn.execute(q, params).fetchall()
+
+def update_transaction(conn: sqlite3.Connection, txn_id: int, **fields) -> int:
+    """
+    허용 필드만 업데이트: date_utc, amount, currency, category, payee, direction, notes, account_id
+    반환: 변경된 행 수(0 또는 1)
+    """
+    allowed = {"date_utc","amount","currency","category","payee","direction","notes","account_id"}
+    sets, params = [], []
+    for k, v in fields.items():
+        if k in allowed:
+            sets.append(f"{k}=?")
+            params.append(v)
+    if not sets:
+        return 0
+    params.append(int(txn_id))
+    sql = f"UPDATE transactions SET {', '.join(sets)}, updated_at_utc=(strftime('%Y-%m-%dT%H:%M:%SZ','now')) WHERE id=?"
+    cur = conn.execute(sql, params)
+    conn.commit()
+    return cur.rowcount
+
+def soft_delete_transaction(conn: sqlite3.Connection, txn_id: int, deleted: bool = True) -> int:
+    cur = conn.execute(
+        "UPDATE transactions SET is_deleted=?, updated_at_utc=(strftime('%Y-%m-%dT%H:%M:%SZ','now')) WHERE id=?",
+        (1 if deleted else 0, int(txn_id))
+    )
+    conn.commit()
+    return cur.rowcount
+
+def find_account(conn: sqlite3.Connection, *, name: Optional[str], institution: Optional[str], currency: str) -> Optional[sqlite3.Row]:
+    sql = """
+    SELECT id, name, institution, currency FROM accounts
+    WHERE currency = ? AND (? IS NULL OR name = ?) AND (? IS NULL OR institution = ?)
+    ORDER BY id LIMIT 1
+    """
+    row = conn.execute(sql, (currency.upper(), name, name, institution, institution)).fetchone()
+    return row
+
+def get_or_create_account_full(conn: sqlite3.Connection, *, name: Optional[str], institution: Optional[str], currency: str,
+                               type: str = "card", opening_balance: float = 0.0) -> int:
+    row = find_account(conn, name=name, institution=institution, currency=currency)
+    if row:
+        return int(row["id"])
+    cur = conn.execute(
+        "INSERT INTO accounts(name, institution, currency, type, opening_balance) VALUES(?,?,?,?,?)",
+        (name, institution, currency.upper(), type, float(opening_balance)),
+    )
+    conn.commit()
+    return cur.lastrowid

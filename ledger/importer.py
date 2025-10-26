@@ -8,7 +8,7 @@ import difflib
 import pandas as pd
 from zoneinfo import ZoneInfo
 
-from .db import get_txns_between
+from .db import get_txns_between, get_or_create_account_full, find_account
 
 LOCAL_TZ = ZoneInfo("America/Chicago")
 
@@ -28,6 +28,17 @@ class Defaults:
     currency: str = "KRW"
     category: str = "Uncategorized"
     direction: str = "auto"  # 'auto' | 'debit' | 'credit'
+
+@dataclass
+class Mapping:
+    date: str
+    amount: str
+    currency: Optional[str] = None
+    payee: Optional[str] = None
+    category: Optional[str] = None
+    notes: Optional[str] = None
+    account: Optional[str] = None       # NEW: 계정명 컬럼
+    institution: Optional[str] = None   # NEW: 기관(은행/카드) 컬럼
 
 
 def _to_iso_utc(x) -> Optional[str]:
@@ -143,3 +154,50 @@ def mark_duplicates(conn, account_id: int, txns: List[Dict]) -> List[Dict]:
         tt["duplicate"] = dup
         out.append(tt)
     return out
+
+def guess_institution_from_payee(payee: Optional[str]) -> Optional[str]:
+    if not payee:
+        return None
+    s = str(payee).lower()
+    # 간단한 키워드 맵 (원하는 대로 추가 가능)
+    rules = {
+        "chase": "Chase",
+        "uwcu": "UWCU",
+        "wcu": "UWCU",
+        "kb": "KB",
+        "국민": "KB",
+        "신한": "Shinhan",
+        "우리": "Woori",
+        "삼성": "Samsung Card",
+    }
+    for k, v in rules.items():
+        if k in s:
+            return v
+    return None
+
+def resolve_account_id(conn, *, currency: str, account_name: Optional[str], institution: Optional[str],
+                       payee: Optional[str], defaults_by_currency: dict, auto_create: bool = True) -> int:
+    cur = (currency or "KRW").upper()
+    # 1) (account_name, institution, currency)로 직접 조회
+    row = find_account(conn, name=(account_name if account_name else None),
+                       institution=(institution if institution else None), currency=cur)
+    if row:
+        return int(row["id"])
+    # 2) institution만 있고 account_name 없음 → institution+currency로 조회
+    if institution:
+        row = find_account(conn, name=None, institution=institution, currency=cur)
+        if row:
+            return int(row["id"])
+    # 3) payee에서 institution 추정
+    inst2 = guess_institution_from_payee(payee) if payee else None
+    if inst2:
+        row = find_account(conn, name=None, institution=inst2, currency=cur)
+        if row:
+            return int(row["id"])
+        if auto_create:
+            return get_or_create_account_full(conn, name=None, institution=inst2, currency=cur, type="card", opening_balance=0.0)
+    # 4) 필요시 자동 생성
+    if auto_create and (account_name or institution):
+        return get_or_create_account_full(conn, name=account_name, institution=institution, currency=cur, type="card", opening_balance=0.0)
+    # 5) 마지막 fallback: 통화별 기본 계정
+    return int(defaults_by_currency.get(cur))
