@@ -13,6 +13,7 @@ from ledger.db import (
     upsert_fx_cache_many,   # 🔹 FX upsert 헬퍼
 )
 from ledger.fx.fred import fetch_dexkous, SOURCE_LABEL
+from ledger.backup import ensure_daily_backup, create_backup, list_backups
 
 st.set_page_config(page_title="Budget App", page_icon="💸", layout="wide")
 
@@ -98,6 +99,32 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"갱신 실패: {e}")
 
+    st.divider()
+
+    # 🔹 Backups 섹션: 일일 자동 백업 + 수동 백업 + 최근 백업 목록
+    with st.expander("Backups", expanded=False):
+        try:
+            created_today = ensure_daily_backup(DB_PATH)  # 하루 1회 자동
+            if created_today:
+                st.success("일일 자동 백업 생성 완료.")
+        except Exception as e:
+            st.warning(f"자동 백업 건너뜀: {e}")
+
+        if st.button("Create backup now"):
+            try:
+                dest = create_backup(DB_PATH)
+                st.success(f"백업 생성: {dest.name}")
+            except Exception as e:
+                st.error(f"백업 실패: {e}")
+
+        st.caption("최근 백업 (최대 5개)")
+        backs = list_backups(limit=5)
+        if backs:
+            for b in backs:
+                st.write("• ", b.name)
+        else:
+            st.write("백업 없음")
+
 # --- 상단 카드들 ---
 c1, c2, c3 = st.columns(3)
 c1.metric("Total Assets (base)", "—", help="KRW or USD after data & FX")
@@ -108,4 +135,4 @@ latest_for_metric = get_latest_fx(conn, "USD", "KRW") if "conn" in locals() else
 fx_text = f"{latest_for_metric['rate']:,.2f} KRW" if latest_for_metric else "—"
 c3.metric("FX (USD→KRW)", fx_text, help="FRED DEXKOUS as-of appears in sidebar")
 
-st.success("Scaffold OK. CSV import, FX provider wired, next: analytics/charts.")
+st.success("Scaffold OK. CSV import, FX provider wired, backups added. Next: analytics/charts.")

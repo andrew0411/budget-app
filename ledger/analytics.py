@@ -218,3 +218,32 @@ def summarize_trends(cat_points: Dict[str, List[TrendPoint]]) -> List[TrendSumma
     # sort by latest month value desc
     out.sort(key=lambda s: s.months[-1].value if s.months else 0.0, reverse=True)
     return out
+
+def mtd_spend(conn: sqlite3.Connection, base: str, now_utc: Optional[datetime] = None) -> Optional[float]:
+    """
+    이번 달 시작(현지 tz) ~ now_utc 사이의 debit 합계를 기준통화로 환산하여 반환.
+    """
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+
+    # 현지(시카고) 월초 → UTC
+    local_now = now_utc.astimezone(LOCAL_TZ)
+    month_start_local = local_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    month_start_utc = month_start_local.astimezone(timezone.utc)
+
+    start_iso = month_start_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_iso = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    df = _fetch_txns(conn, start_iso, end_iso)
+    if df.empty:
+        return 0.0
+
+    df = df[df["direction"] == "debit"].copy()
+
+    # 환산
+    conv_vals = []
+    for _, r in df.iterrows():
+        v = _convert_amount(conn, float(r["amount"]), str(r["currency"]), base, r["date_utc"])
+        if v is not None:
+            conv_vals.append(v)
+    return float(sum(conv_vals)) if conv_vals else 0.0

@@ -1,6 +1,7 @@
 from pathlib import Path
 import sqlite3
-from typing import Optional, List, Iterable, Tuple, Dict
+from datetime import datetime, timezone
+from typing import Optional, List, Iterable, Tuple, Dict, Any
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -169,3 +170,88 @@ def get_latest_fx(conn: sqlite3.Connection, base: str, quote: str) -> Optional[s
            ORDER BY date_utc DESC LIMIT 1""",
         (base.upper(), quote.upper()),
     ).fetchone()
+
+def account_balances_native(conn: sqlite3.Connection, as_of_iso: Optional[str] = None):
+    """
+    각 계정의 원화/달러 '자체통화' 잔액을 계산하여 리스트로 반환.
+    잔액 = opening_balance + (credit 합계) - (debit 합계)
+    """
+    date_filter = ""
+    params = []
+    if as_of_iso:
+        date_filter = "AND t.date_utc <= ?"
+        params.append(as_of_iso)
+
+    q = f"""
+    SELECT a.id, a.name, a.currency, a.opening_balance,
+           COALESCE(SUM(CASE
+                WHEN t.direction='credit' THEN t.amount
+                WHEN t.direction='debit'  THEN -t.amount
+                ELSE 0 END), 0) AS net_txn
+    FROM accounts a
+    LEFT JOIN transactions t
+      ON t.account_id=a.id AND t.is_deleted=0 {date_filter}
+    GROUP BY a.id, a.name, a.currency, a.opening_balance
+    ORDER BY a.id
+    """
+    rows = conn.execute(q, params).fetchall()
+    out = []
+    for r in rows:
+        bal = float(r["opening_balance"]) + float(r["net_txn"])
+        out.append({
+            "account_id": int(r["id"]),
+            "name": str(r["name"]),
+            "currency": str(r["currency"]).upper(),
+            "balance_native": float(bal),
+        })
+    return out
+
+def _fx_for_date_or_latest(conn: sqlite3.Connection, base: str, quote: str, date_str: str) -> Optional[float]:
+    """
+    해당 날짜의 환율이 없으면 '그 이전 최신'을 사용.
+    """
+    row = conn.execute(
+        """SELECT rate FROM fx_cache
+           WHERE base=? AND quote=? AND date_utc<=?
+           ORDER BY date_utc DESC LIMIT 1""",
+        (base.upper(), quote.upper(), date_str)
+    ).fetchone()
+    return float(row["rate"]) if row else None
+
+def balances_in_base(conn: sqlite3.Connection, base: str = "KRW", as_of_iso: Optional[str] = None):
+    """
+    각 계정 원화/달러 잔액을 기준통화로 환산하여 리스트로 반환:
+    [{name, currency, balance_native, balance_base}, ...], total_base 포함
+    """
+    base = base.upper()
+    if as_of_iso is None:
+        as_of_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    as_of_date = as_of_iso[:10]  # YYYY-MM-DD
+
+    items = account_balances_native(conn, as_of_iso)
+    result = []
+    total = 0.0
+
+    for it in items:
+        cur = it["currency"].upper()
+        nat = float(it["balance_native"])
+
+        if cur == base:
+            base_val = nat
+        elif {cur, base} == {"USD", "KRW"}:
+            r = _fx_for_date_or_latest(conn, "USD", "KRW", as_of_date)
+            if r is None:
+                base_val = None
+            else:
+                base_val = nat * r if base == "KRW" else (nat / r)
+        else:
+            base_val = None  # 미지원 통화쌍은 건너뜀 (MVP)
+
+        result.append({
+            **it,
+            "balance_base": base_val
+        })
+        if base_val is not None:
+            total += base_val
+
+    return {"items": result, "total_base": total}
