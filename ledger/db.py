@@ -333,3 +333,103 @@ def get_or_create_account_full(conn: sqlite3.Connection, *, name: Optional[str],
     )
     conn.commit()
     return cur.lastrowid
+
+EXTRA_SCHEMA = """
+CREATE TABLE IF NOT EXISTS rules (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  pattern          TEXT NOT NULL,
+  match_type       TEXT NOT NULL CHECK (match_type IN ('contains','regex')) DEFAULT 'contains',
+  category         TEXT NOT NULL,
+  institution      TEXT, -- 선택: 특정 기관에만 한정
+  priority         INTEGER NOT NULL DEFAULT 100,
+  enabled          INTEGER NOT NULL DEFAULT 1,
+  created_at_utc   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  updated_at_utc   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_rules_priority ON rules(priority);
+
+CREATE TABLE IF NOT EXISTS budgets (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  category         TEXT NOT NULL,
+  amount           REAL NOT NULL, -- 예산액
+  currency         TEXT NOT NULL CHECK (length(currency)=3) DEFAULT 'KRW',
+  month            TEXT, -- 'YYYY-MM' 또는 NULL(매월 공통)
+  created_at_utc   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  updated_at_utc   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  UNIQUE(category, month, currency)
+);
+"""
+
+# init_db에서 추가 스키마 실행
+_prev_init_db = init_db
+def init_db(conn: sqlite3.Connection) -> None:  # type: ignore[override]
+    _prev_init_db(conn)
+    conn.executescript(EXTRA_SCHEMA)
+
+# ---- rules CRUD ----
+from typing import Any, List, Optional, Dict
+
+def add_rule(conn: sqlite3.Connection, *, pattern: str, category: str,
+             match_type: str = "contains", institution: Optional[str] = None,
+             priority: int = 100, enabled: bool = True) -> int:
+    cur = conn.execute(
+        """INSERT INTO rules(pattern,match_type,category,institution,priority,enabled)
+           VALUES(?,?,?,?,?,?)""",
+        (pattern, match_type, category, institution, int(priority), 1 if enabled else 0)
+    )
+    conn.commit()
+    return cur.lastrowid
+
+def list_rules(conn: sqlite3.Connection, include_disabled: bool = False) -> List[sqlite3.Row]:
+    where = "" if include_disabled else "WHERE enabled=1"
+    return conn.execute(f"SELECT * FROM rules {where} ORDER BY priority ASC, id ASC").fetchall()
+
+def update_rule(conn: sqlite3.Connection, rule_id: int, **fields) -> int:
+    allowed = {"pattern","match_type","category","institution","priority","enabled"}
+    sets, params = [], []
+    for k,v in fields.items():
+        if k in allowed:
+            sets.append(f"{k}=?")
+            params.append(v)
+    if not sets:
+        return 0
+    params.append(int(rule_id))
+    cur = conn.execute(
+        f"UPDATE rules SET {', '.join(sets)}, updated_at_utc=(strftime('%Y-%m-%dT%H:%M:%SZ','now')) WHERE id=?",
+        params
+    )
+    conn.commit()
+    return cur.rowcount
+
+def delete_rule(conn: sqlite3.Connection, rule_id: int) -> int:
+    cur = conn.execute("DELETE FROM rules WHERE id=?", (int(rule_id),))
+    conn.commit()
+    return cur.rowcount
+
+# ---- budgets CRUD ----
+def upsert_budget(conn: sqlite3.Connection, *, category: str, amount: float,
+                  currency: str = "KRW", month: Optional[str] = None) -> int:
+    row = conn.execute(
+        "SELECT id FROM budgets WHERE category=? AND currency=? AND (month IS ? OR month=?) LIMIT 1",
+        (category, currency.upper(), month, month)
+    ).fetchone()
+    if row:
+        cur = conn.execute(
+            "UPDATE budgets SET amount=?, updated_at_utc=(strftime('%Y-%m-%dT%H:%M:%SZ','now')) WHERE id=?",
+            (float(amount), int(row["id"]))
+        )
+        conn.commit()
+        return int(row["id"])
+    cur = conn.execute(
+        "INSERT INTO budgets(category,amount,currency,month) VALUES(?,?,?,?)",
+        (category, float(amount), currency.upper(), month)
+    )
+    conn.commit()
+    return cur.lastrowid
+
+def list_budgets(conn: sqlite3.Connection, month: Optional[str] = None) -> List[sqlite3.Row]:
+    if month:
+        return conn.execute(
+            "SELECT * FROM budgets WHERE (month IS NULL OR month=?) ORDER BY category", (month,)
+        ).fetchall()
+    return conn.execute("SELECT * FROM budgets ORDER BY category").fetchall()

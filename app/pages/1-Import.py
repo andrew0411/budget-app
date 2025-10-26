@@ -3,6 +3,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from ledger.rules import apply_category_rules
 from ledger.db import bootstrap, ensure_default_accounts, add_transaction
 from ledger.importer import (
     dataframe_from_csv,
@@ -62,8 +63,18 @@ defaults = Defaults(
 )
 
 # ✅ 없는 계정 자동 생성 옵션
-auto_create = st.checkbox("없는 계정은 자동 생성", value=True,
-                          help="계정명/기관/Payee 힌트로 찾지 못하면 새 계정을 생성합니다. (type=card, opening_balance=0)")
+auto_create = st.checkbox(
+    "없는 계정은 자동 생성",
+    value=True,
+    help="계정명/기관/Payee 힌트로 찾지 못하면 새 계정을 생성합니다. (type=card, opening_balance=0)"
+)
+
+# ✅ 룰 적용 옵션 (룰이 매칭되면 CSV 카테고리를 덮어씁니다)
+apply_rules = st.checkbox(
+    "카테고리 자동 분류 규칙 적용",
+    value=True,
+    help="룰에 매칭되면 CSV의 카테고리를 대체합니다."
+)
 
 mapping = Mapping(
     date=date_col,
@@ -83,7 +94,7 @@ if st.button("Dry-run (계정 매핑+중복 감지)"):
             st.error("매핑 결과가 비었습니다. 날짜/금액 컬럼을 다시 확인해주세요.")
             st.stop()
 
-        # 행별 계정 라우팅 + 계정 단위 중복 감지
+        # 행별 계정 라우팅 + (룰 적용 선택 시) 카테고리 자동 분류 + 계정 단위 중복 감지
         marked_all = []
         for i, t in enumerate(txns):
             # 통화 결정 (없으면 기본통화)
@@ -98,6 +109,17 @@ if st.button("Dry-run (계정 매핑+중복 감지)"):
             if mapping.institution and (mapping.institution in df.columns):
                 v = df.iloc[i][mapping.institution]
                 inst_hint = None if pd.isna(v) else str(v)
+
+            # ✅ (선택) 룰을 사용한 카테고리 자동 분류
+            if apply_rules:
+                inst_hint_str = inst_hint  # 이미 문자열 또는 None
+                cat2 = apply_category_rules(
+                    conn,
+                    payee=t.get("payee"),
+                    institution=inst_hint_str
+                )
+                if cat2:
+                    t["category"] = cat2  # 룰 매칭 시 CSV 카테고리를 덮어씀
 
             # ✅ 계정 결정(없으면 기관/Payee 추정 → 자동 생성 옵션 반영)
             account_id = resolve_account_id(
@@ -115,7 +137,7 @@ if st.button("Dry-run (계정 매핑+중복 감지)"):
             flagged["account_id"] = account_id
             marked_all.append(flagged)
 
-    st.success(f"총 {len(marked_all)}건 변환됨. (계정 라우팅 및 중복 감지 완료)")
+    st.success(f"총 {len(marked_all)}건 변환됨. (룰 적용·계정 라우팅·중복 감지 완료)")
     st.write("중복(duplicate)이 True인 행은 기본적으로 삽입하지 않습니다.")
     preview_cols = ["date_utc", "amount", "currency", "category", "payee", "direction", "account_id", "duplicate"]
     st.dataframe(pd.DataFrame(marked_all)[preview_cols].head(100))

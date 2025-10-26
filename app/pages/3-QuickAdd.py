@@ -1,4 +1,3 @@
-# app/pages/3_QuickAdd.py
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -10,29 +9,44 @@ st.title("⚡ Quick Add")
 
 DB_PATH = str(Path(__file__).resolve().parents[1] / "db.sqlite3")
 conn = bootstrap(DB_PATH)
-defaults = ensure_default_accounts(conn, currencies=("KRW","USD"))
+defaults = ensure_default_accounts(conn, currencies=("KRW", "USD"))
 
-col0, col1 = st.columns([1,1])
+# 통화 선택
+col0, col1 = st.columns([1, 1])
 with col0:
-    currency = st.selectbox("Currency", ["KRW","USD"], index=0)
+    currency = st.selectbox("Currency", ["KRW", "USD"], index=0)
+
+# 계정 선택(해당 통화만)
 with col1:
-    # 통화에 맞는 계정만 노출 (은행/카드 구분은 name/institution에 반영)
-    acc_rows = [r for r in get_accounts(conn) if r["currency"].upper()==currency]
+    # 1) 모든 계정 로드 후 dict로 변환
+    rows = get_accounts(conn)
+    acc_all = [dict(r) for r in rows]
+    # 2) 통화 필터 (키 없을 수도 있으므로 .get)
+    acc_rows = [r for r in acc_all if str(r.get("currency", "")).upper() == currency]
+
     if not acc_rows:
         st.warning("해당 통화의 계정이 없습니다. Accounts 페이지에서 먼저 생성하세요.")
         st.stop()
-    # 라벨: "이름 (기관)"
-    options = {f'{r["name"]} ({r["currency"]}{", "+r["name"] if not r["name"] else ""})' : r["id"] for r in acc_rows}
-    # 더 친절한 라벨
-    options = {f'{r["name"]} — {r["currency"]} / {r["id"]}' if r.get("name") else f'Account {r["id"]} — {r["currency"]}': r["id"] for r in acc_rows}
-    # 기본 선택: 통화별 Default 계정
+
+    # 보기 좋은 라벨 구성 (dict 기반)
+    labels = []
+    for r in acc_rows:
+        aid = int(r["id"])
+        name = r.get("name") or f"Account {aid}"
+        inst = r.get("institution") or ""
+        cur = str(r.get("currency", "")).upper()
+        label = f"{aid} — {name} ({inst}) [{cur}]"
+        labels.append((label, aid))
+
+    label_list = [L for L, _ in labels]
+    # 기본 선택: 통화별 기본 계정(없으면 첫 번째)
     default_id = defaults.get(currency)
-    default_label = next((k for k,v in options.items() if v == default_id), list(options.keys())[0])
-    account_id = st.selectbox("Account (Bank/Card)", list(options.keys()), index=list(options.keys()).index(default_label))
-    account_id = options[account_id]
+    default_label_idx = next((i for i, (_, aid) in enumerate(labels) if default_id and aid == int(default_id)), 0)
+    chosen_label = st.selectbox("Account (Bank/Card)", label_list, index=default_label_idx)
+    account_id = next(aid for L, aid in labels if L == chosen_label)
 
 with st.form("quick_add"):
-    col1, col2, col3 = st.columns([1,1,1])
+    col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
         dt = st.date_input("Date", datetime.now().date())
         tm = st.time_input("Time", datetime.now().time().replace(microsecond=0))
@@ -48,6 +62,7 @@ with st.form("quick_add"):
 if submit:
     local_dt = datetime.combine(dt, tm).astimezone()
     utc_iso = local_dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     add_transaction(
         conn,
         date_utc=utc_iso,
@@ -59,5 +74,5 @@ if submit:
         payee=payee or None,
         notes=notes or None,
     )
-    st.success("Saved! Enter 키로 바로 다음 입력을 이어갈 수 있어요.")
+    st.success("Saved! Enter 키로 다음 입력을 이어갈 수 있어요.")
     st.experimental_rerun()

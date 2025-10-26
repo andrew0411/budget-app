@@ -295,3 +295,37 @@ def spend_by_institution(conn: sqlite3.Connection, base: str,
     )
     grp = grp.sort_values("amount_base", ascending=False)
     return grp
+
+def month_actuals_by_category(conn: sqlite3.Connection, base: str, year: int, month: int) -> Dict[str, float]:
+    """
+    해당 월(현지 tz 기준)의 카테고리별 지출합(=debit 합계)을 기준통화로 환산해서 반환.
+    ZoneInfo(예: America/Chicago) 사용: localize 불가 → tz-aware로 직접 생성.
+    """
+    from datetime import datetime, timezone
+
+    LOCAL_TZ = ZoneInfo("America/Chicago")  # 환경에 맞추어 필요 시 설정
+    # tz-aware 시작/종료
+    start_local = datetime(year=year, month=month, day=1, tzinfo=LOCAL_TZ)
+    if month == 12:
+        end_local = datetime(year=year + 1, month=1, day=1, tzinfo=LOCAL_TZ)
+    else:
+        end_local = datetime(year=year, month=month + 1, day=1, tzinfo=LOCAL_TZ)
+
+    start_iso = start_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_iso = end_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # 기존 내부 헬퍼를 사용한다고 가정 (_fetch_txns, _convert_amount)
+    df = _fetch_txns(conn, start_iso, end_iso)
+    if df.empty:
+        return {}
+
+    df = df[df["direction"] == "debit"].copy()
+    conv = []
+    for _, r in df.iterrows():
+        v = _convert_amount(conn, float(r["amount"]), str(r["currency"]), base, r["date_utc"])
+        conv.append(v)
+    df["amount_base"] = conv
+    df = df.dropna(subset=["amount_base"])
+    grp = df.groupby("category", as_index=False)["amount_base"].sum()
+    return {str(r["category"]): float(r["amount_base"]) for _, r in grp.iterrows()}
+
