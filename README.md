@@ -43,7 +43,7 @@ conda install -n streamlit-app -c conda-forge streamlit pandas numpy altair scip
 # 4) (Optional) set up FRED API (see "Secrets" below)
 
 # 5) Run the app
-conda run -n streamlit-app python -m streamlit run app/main.py
+conda run -n streamlit-app python -m streamlit run app/Main.py
 ```
 
 ## 🔐 Secrets (FRED FX, optional)

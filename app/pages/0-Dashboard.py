@@ -15,9 +15,9 @@ from ledger.analytics import mtd_spend, month_actuals_by_category
 st.title("🏠 Dashboard")
 
 # ── Dark mode toggle + global CSS ────────────────────────────────────────────
-with st.sidebar:
-    dark = st.checkbox("🌙 Dark mode", value=get_dark_mode())
-    set_dark_mode(dark)
+# with st.sidebar:
+#     dark = st.checkbox("🌙 Dark mode", value=get_dark_mode())
+#     set_dark_mode(dark)
 inject_css()
 
 # ── DB bootstrap ─────────────────────────────────────────────────────────────

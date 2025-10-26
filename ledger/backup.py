@@ -9,7 +9,7 @@ def _backups_dir(path: str | Path) -> Path:
     return p
 
 def create_backup(db_path: str | Path, backups_dir: str | Path = "backups",
-                  prefix: str = "ledger", keep_last: int | None = 30) -> Path:
+                  prefix: str = "ledger", keep_last: int | None = 10) -> Path:
     backups = _backups_dir(backups_dir)
     # 🔧 초·마이크로초까지 포함해 충돌 최소화
     ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
