@@ -27,7 +27,7 @@ st.caption("priority가 낮을수록 먼저 평가합니다(ASC). match_type: co
 # ──────────────────────────────────────────────────────────────────────────────
 st.subheader("Add Rule")
 
-with st.form("add_rule"):
+with st.form("add_rule", enter_to_submit=False):
     col1, col2, col3, col4, col5 = st.columns([2,1,2,1,1])
     with col1:
         pattern = st.text_input("pattern (키워드 또는 정규식)", value="", help="예: 'starbucks' 또는 'coffee|☕'")
@@ -48,7 +48,7 @@ with st.form("add_rule"):
             add_rule(conn, pattern=pattern, category=category, match_type=mtype,
                      institution=(inst or None), priority=int(prio), enabled=bool(enabled))
             st.success("Rule created.")
-            st.experimental_rerun()
+            st.rerun()
 
 # ──────────────────────────────────────────────────────────────────────────────
 # List / Edit (수정)
@@ -89,14 +89,14 @@ else:
                 if fields:
                     changed += update_rule(conn, int(row["id"]), **fields)
             st.success(f"Updated {changed} rule(s)." if changed else "No changes.")
-            st.experimental_rerun()
+            st.rerun()
 
     with colB:
         del_id = st.selectbox("Delete rule id", options=list(edited["id"]), index=0)
         if st.button("Delete selected rule"):
             delete_rule(conn, int(del_id))
             st.success(f"Deleted rule {del_id}.")
-            st.experimental_rerun()
+            st.rerun()
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Test console (테스트)

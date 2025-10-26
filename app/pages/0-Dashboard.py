@@ -7,7 +7,7 @@ import streamlit as st
 
 from app.ui import (
     inject_css, metric_card, chip, bar_chart,
-    get_dark_mode, set_dark_mode, fmt_money
+    fmt_money
 )
 from ledger.db import bootstrap, balances_in_base, list_budgets
 from ledger.analytics import mtd_spend, month_actuals_by_category

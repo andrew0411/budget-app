@@ -111,7 +111,7 @@ with colA:
             if fields:
                 changed += update_transaction(conn, int(row["id"]), **fields)
         st.success(f"Updated {changed} row(s)." if changed else "No changes.")
-        st.experimental_rerun()
+        st.rerun()
 
 with colB:
     if st.button("Delete selected"):
@@ -120,7 +120,7 @@ with colB:
             if bool(row.get("delete")) and not bool(row.get("is_deleted", False)):
                 deleted += soft_delete_transaction(conn, int(row["id"]), True)
         st.success(f"Deleted {deleted} row(s)." if deleted else "No selection.")
-        st.experimental_rerun()
+        st.rerun()
 
 with colC:
     if st.button("Undelete selected"):
@@ -129,7 +129,7 @@ with colC:
             if bool(row.get("undelete")) and bool(row.get("is_deleted", False)):
                 restored += soft_delete_transaction(conn, int(row["id"]), False)
         st.success(f"Restored {restored} row(s)." if restored else "No selection.")
-        st.experimental_rerun()
+        st.rerun()
 
 with colD:
     if st.button("Re-apply rules to selected"):
@@ -141,4 +141,4 @@ with colD:
             if new_cat and new_cat != row.get("category"):
                 updated += update_transaction(conn, int(row["id"]), category=new_cat)
         st.success(f"Rules applied to {updated} row(s)." if updated else "No changes.")
-        st.experimental_rerun()
+        st.rerun()

@@ -77,4 +77,4 @@ if submit:
         notes=notes or None,
     )
     st.success(f"Saved {fmt_money(amount, currency)} to account {account_id}. Enter 키로 다음 입력을 이어갈 수 있어요.")
-    st.experimental_rerun()
+    st.rerun()

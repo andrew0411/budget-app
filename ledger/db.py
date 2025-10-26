@@ -104,11 +104,11 @@ def count_rows(conn: sqlite3.Connection, table: str) -> int:
     return int(row["n"])
 
 # ---------- Helpers for import/duplicate detection ----------
-
 def get_accounts(conn: sqlite3.Connection) -> List[sqlite3.Row]:
     return conn.execute(
-        "SELECT id, name, currency FROM accounts WHERE 1 ORDER BY id"
+        "SELECT id, name, institution, currency, type, opening_balance FROM accounts ORDER BY id"
     ).fetchall()
+
 
 def get_txns_between(conn: sqlite3.Connection, account_id: int, start_iso: str, end_iso: str) -> List[sqlite3.Row]:
     return conn.execute(
@@ -433,3 +433,58 @@ def list_budgets(conn: sqlite3.Connection, month: Optional[str] = None) -> List[
             "SELECT * FROM budgets WHERE (month IS NULL OR month=?) ORDER BY category", (month,)
         ).fetchall()
     return conn.execute("SELECT * FROM budgets ORDER BY category").fetchall()
+
+
+def get_account_by_id(conn: sqlite3.Connection, account_id: int) -> Optional[sqlite3.Row]:
+    """특정 ID의 계정 정보를 반환"""
+    return conn.execute(
+        "SELECT * FROM accounts WHERE id=?", (int(account_id),)
+    ).fetchone()
+
+
+def update_account(conn: sqlite3.Connection, account_id: int, **fields) -> int:
+    """
+    계정 정보 업데이트
+    허용 필드: name, institution, currency, type, opening_balance
+    반환: 변경된 행 수(0 또는 1)
+    """
+    allowed = {"name", "institution", "currency", "type", "opening_balance"}
+    sets, params = [], []
+    for k, v in fields.items():
+        if k in allowed:
+            sets.append(f"{k}=?")
+            # currency는 대문자로
+            if k == "currency":
+                params.append(v.upper())
+            # opening_balance는 float로
+            elif k == "opening_balance":
+                params.append(float(v))
+            else:
+                params.append(v)
+    if not sets:
+        return 0
+
+    params.append(int(account_id))
+    sql = f"UPDATE accounts SET {', '.join(sets)}, updated_at_utc=(strftime('%Y-%m-%dT%H:%M:%SZ','now')) WHERE id=?"
+    cur = conn.execute(sql, params)
+    conn.commit()
+    return cur.rowcount
+
+
+def delete_account(conn: sqlite3.Connection, account_id: int) -> int:
+    """
+    계정 삭제 (CASCADE로 연결된 거래도 함께 삭제됨)
+    반환: 삭제된 행 수(0 또는 1)
+    """
+    cur = conn.execute("DELETE FROM accounts WHERE id=?", (int(account_id),))
+    conn.commit()
+    return cur.rowcount
+
+
+def count_account_transactions(conn: sqlite3.Connection, account_id: int) -> int:
+    """특정 계정의 거래 개수 반환 (삭제되지 않은 것만)"""
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM transactions WHERE account_id=? AND is_deleted=0",
+        (int(account_id),)
+    ).fetchone()
+    return int(row["n"])
