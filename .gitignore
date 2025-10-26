@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.log
+
+# Project
+secrets/
+backups/*.sqlite
+db.sqlite
+db.sqlite3
+*.db
+
+# Streamlit
+.streamlit/
