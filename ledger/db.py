@@ -1,7 +1,6 @@
-# ledger/db.py
 from pathlib import Path
 import sqlite3
-from typing import Optional
+from typing import Optional, List
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -102,3 +101,45 @@ def add_transaction(conn: sqlite3.Connection, *, date_utc: str, amount: float, c
 def count_rows(conn: sqlite3.Connection, table: str) -> int:
     row = conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()
     return int(row["n"])
+
+# ---------- Helpers for import/duplicate detection ----------
+
+def get_accounts(conn: sqlite3.Connection) -> List[sqlite3.Row]:
+    return conn.execute(
+        "SELECT id, name, currency FROM accounts WHERE 1 ORDER BY id"
+    ).fetchall()
+
+def get_txns_between(conn: sqlite3.Connection, account_id: int, start_iso: str, end_iso: str) -> List[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT id, date_utc, amount, currency, payee, category
+        FROM transactions
+        WHERE is_deleted=0
+          AND account_id=?
+          AND date_utc BETWEEN ? AND ?
+        """,
+        (int(account_id), start_iso, end_iso)
+    ).fetchall()
+
+def get_or_create_account(conn: sqlite3.Connection, *, name: str, currency: str,
+                          type: str = "cash", opening_balance: float = 0.0) -> int:
+    row = conn.execute(
+        "SELECT id FROM accounts WHERE name=? AND currency=? LIMIT 1",
+        (name, currency.upper()),
+    ).fetchone()
+    if row:
+        return int(row["id"])
+    cur = conn.execute(
+        "INSERT INTO accounts(name, institution, currency, type, opening_balance) VALUES(?,?,?,?,?)",
+        (name, None, currency.upper(), type, float(opening_balance)),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+def ensure_default_accounts(conn: sqlite3.Connection, currencies=("KRW","USD")) -> dict:
+    """Ensure default per-currency accounts exist. Returns {currency: account_id}."""
+    mapping = {}
+    for cur in currencies:
+        aid = get_or_create_account(conn, name=f"Default {cur}", currency=cur, type="cash", opening_balance=0.0)
+        mapping[cur.upper()] = aid
+    return mapping

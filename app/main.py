@@ -1,11 +1,18 @@
-# app/Main.py
-import streamlit as st
 from pathlib import Path
 from datetime import datetime, timezone
 
-from ledger.db import bootstrap, count_rows, add_account, add_transaction
+import streamlit as st
+
+from ledger.db import (
+    bootstrap,
+    count_rows,
+    add_account,
+    add_transaction,
+    ensure_default_accounts,
+)
 
 st.set_page_config(page_title="Budget App", page_icon="💸", layout="wide")
+
 st.title("💸 Budget App (Pastel Ledger)")
 st.caption("Local-first, beginner-friendly personal finance tracker")
 
@@ -16,6 +23,9 @@ with st.sidebar:
     st.subheader("Database")
     try:
         conn = bootstrap(DB_PATH)
+        # 기본 계정 자동 생성 (KRW, USD)
+        defaults = ensure_default_accounts(conn, currencies=("KRW", "USD"))
+
         acc_n = count_rows(conn, "accounts")
         txn_n = count_rows(conn, "transactions")
         st.success(f"DB 연결 OK · accounts={acc_n}, transactions={txn_n}")
@@ -24,8 +34,18 @@ with st.sidebar:
 
     if st.button("샘플 데이터 추가 (계정+거래 1건)"):
         try:
-            acc_id = add_account(conn, name="Cash KRW", institution="Local", currency="KRW",
-                                 type="cash", opening_balance=0.0)
+            # KRW 기본 계정 확인
+            krw_acc_id = defaults.get("KRW")
+            if not krw_acc_id:
+                krw_acc_id = add_account(
+                    conn,
+                    name="Default KRW",
+                    institution="Local",
+                    currency="KRW",
+                    type="cash",
+                    opening_balance=0.0,
+                )
+
             now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             add_transaction(
                 conn,
@@ -33,7 +53,7 @@ with st.sidebar:
                 amount=12500,
                 currency="KRW",
                 category="Food",
-                account_id=acc_id,
+                account_id=krw_acc_id,
                 direction="debit",
                 payee="Sample Cafe",
                 notes="Scaffold sample",
